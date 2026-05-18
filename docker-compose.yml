@@ -1,0 +1,32 @@
+# NRMS AI Assistant — Docker Compose
+#
+# Usage:
+#   cp .env.example .env   # set GEMINI_API_KEY
+#   docker compose up -d --build
+#
+# API listens on 127.0.0.1:8001 — point host nginx at this port (see nginx/).
+
+services:
+  nrms-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nrms-ai-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NRMS_DATA_DIR: /data/tifs
+      GEOSERVER_URL: https://nrms.ati.gov.et/geoserver
+    volumes:
+      # Mount GeoTIFFs from the host (adjust path to your server)
+      - ${NRMS_TIFS_HOST_PATH:-/home/kaleabwalelign}:/data/tifs:ro
+    ports:
+      # Bind locally only; nginx on the host proxies public traffic
+      - "127.0.0.1:8001:8001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s

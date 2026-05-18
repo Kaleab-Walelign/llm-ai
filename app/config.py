@@ -1,0 +1,33 @@
+"""Cells 1–2: configuration and paths."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DATA_DIR = Path(os.getenv("NRMS_DATA_DIR", "/home/kaleabwalelign"))
+GEOSERVER_BASE = os.getenv("GEOSERVER_URL", "https://nrms.ati.gov.et/geoserver").rstrip("/")
+WFS_URL = f"{GEOSERVER_BASE}/geonode/ows"
+WCS_URL = f"{GEOSERVER_BASE}/geonode/wcs"
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
+
+
+def resolve_tif_path(filename: str | None) -> str | None:
+    if not filename:
+        return None
+    p = Path(filename)
+    if p.is_absolute() and p.exists():
+        return str(p)
+    candidate = DATA_DIR / filename
+    if candidate.exists():
+        return str(candidate)
+    if p.exists():
+        return str(p)
+    return str(candidate)
