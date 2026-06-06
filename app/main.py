@@ -21,8 +21,15 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.ai import get_chat_manager
+from app import cache as redis_cache
+from app import database as pg_database
+from app.analytics import run_query
+from app.boundaries import list_woreda_names
 from app.config import CORS_ORIGINS, DATA_DIR, GEOSERVER_BASE, GEMINI_API_KEY
+from app.data_catalog import INDICATOR_DIRS, woreda_shp_path
 from app.detection import TOPIC_TO_LAYERS, detect_admin_level, detect_layers
+from app.intent import parse_intent
+from app.timeseries import list_tif_files, parse_time_from_text
 from app.layers import LAYER_CLASSIFY
 from app.regions import (
     ACTIVE_REGIONS,
@@ -31,7 +38,6 @@ from app.regions import (
     detect_region,
 )
 from app.schemas import AnalyzeRequest, ChatRequest, ChatResponse
-from app.spatial import run_spatial_analysis
 from app.tools import (
     compare_woredas,
     get_region_report,
@@ -83,6 +89,10 @@ def health():
         "status": "ok",
         "gemini": bool(GEMINI_API_KEY),
         "data_dir": str(DATA_DIR),
+        "woreda_shp": str(woreda_shp_path()),
+        "woreda_shp_exists": woreda_shp_path().is_file(),
+        "redis": redis_cache.ping(),
+        "postgres": pg_database.ping(),
         "geoserver": GEOSERVER_BASE,
     }
 
@@ -116,12 +126,48 @@ def api_layers():
 @app.get("/api/detect")
 def api_detect(q: str = Query(...)):
     rk = detect_region(q)
+    woreda = None
+    try:
+        from app.intent import detect_woreda
+        woreda = detect_woreda(q)
+    except FileNotFoundError:
+        pass
     return {
         "region_key": rk,
         "region_name": REGION_REGISTRY[rk]["display_name"],
+        "woreda": woreda,
         "layers": detect_layers(q, rk),
         "admin_level": detect_admin_level(q),
+        "time_hint": parse_time_from_text(q),
     }
+
+
+@app.get("/api/indicators")
+def api_indicators():
+    return {
+        "indicators": INDICATOR_DIRS,
+        "sample_files": {
+            k: list_tif_files(k)[:3] for k in list(INDICATOR_DIRS)[:5]
+        },
+    }
+
+
+@app.get("/api/woredas")
+def api_woredas():
+    try:
+        return {"woredas": list(list_woreda_names())}
+    except FileNotFoundError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@app.post("/api/query")
+def api_query(q: str = Query(...)):
+    """Full pipeline without Gemini — intent → cache → postgres → analytics."""
+    try:
+        intent = parse_intent(q)
+        return _json_safe(run_query(intent))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -182,16 +228,22 @@ def api_analyze_get(
 
 @app.post("/api/analyze")
 def api_analyze_post(body: AnalyzeRequest):
+    from app.data_catalog import list_available_indicators
+    from app.intent import QueryIntent
+
+    time_hint = parse_time_from_text(f"{body.area_name} {body.layers}")
     rk = body.region if body.region in REGION_REGISTRY else detect_region(
         f"{body.area_name} {body.layers}"
     )
-    admin = body.admin_level or detect_admin_level(f"{body.area_name} {body.layers}")
     lkeys = detect_layers(body.layers, rk)
-    explicit = [
-        x.strip()
-        for x in body.layers.split(",")
-        if x.strip() in REGION_REGISTRY[rk]["layers"]
-    ]
+    available = set(list_available_indicators())
+    explicit = [x.strip() for x in body.layers.split(",") if x.strip() in available]
     if explicit:
         lkeys = explicit
-    return _json_safe(run_spatial_analysis(body.area_name, lkeys, rk, admin))
+    intent = QueryIntent(
+        woreda=body.area_name,
+        indicators=lkeys,
+        time_hint=time_hint,
+        raw_question=body.layers,
+    )
+    return _json_safe(run_query(intent))

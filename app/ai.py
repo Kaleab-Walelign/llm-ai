@@ -1,7 +1,9 @@
-"""Cell 12: Gemini AI with automatic function calling."""
+"""Gemini explanation layer — receives compact analytics JSON."""
 
 from __future__ import annotations
 
+import json
+import logging
 import threading
 import uuid
 from typing import Any
@@ -12,34 +14,25 @@ load_dotenv()
 
 import google.generativeai as genai
 
+from app.analytics import build_compact_json, run_query
 from app.config import GEMINI_API_KEY, GEMINI_MODEL
-from app.regions import ACTIVE_REGIONS, PLANNED_REGIONS
-from app.tools import (
-    compare_woredas,
-    get_region_report,
-    get_woreda_report,
-    get_zone_report,
-)
+from app.intent import parse_intent
 
-SYSTEM_INSTRUCTION = f"""You are the ATI NRMS Expert — professional rangeland monitoring
+logger = logging.getLogger(__name__)
+
+SYSTEM_INSTRUCTION = """You are the ATI NRMS Expert — professional rangeland monitoring
 assistant for Ethiopia's National Rangeland Monitoring System.
 
-ACTIVE REGIONS (data available now): {", ".join(ACTIVE_REGIONS)}
-PLANNED REGIONS (say 'data coming soon' if asked): {", ".join(PLANNED_REGIONS)}
+You receive compact JSON analytics (woreda, indicators, scores, labels, time periods).
+Never invent values — use only the numbers in the JSON.
 
-TOOLS — always call one BEFORE answering any data question:
-  get_woreda_report  → conditions for a specific woreda
-  get_zone_report    → conditions for a zone (admin level 2)
-  get_region_report  → overall conditions for an entire region
-  compare_woredas    → side-by-side comparison of multiple woredas
+Structure your answer:
+1) Brief summary for the woreda and time period
+2) Key findings per indicator (score, label, what it means)
+3) Practical recommendations for pastoralists and policymakers
+4) Flag URGENT when any indicator is Very Low or Low
 
-RULES:
-- Never guess or invent values. Always use tool data.
-- For planned regions, explain data is not yet on NRMS and name the active ones.
-- Structure answers: 1) summary  2) key findings per layer  3) recommendations.
-- Flag URGENT when any layer is Very Low or Low.
-- Use the 'ai_context' field from tool results to ground your answer.
-- Be concise and professional. Use the actual numbers from the data."""
+Be concise, professional, and grounded in the provided data."""
 
 
 def _create_model() -> genai.GenerativeModel:
@@ -48,55 +41,72 @@ def _create_model() -> genai.GenerativeModel:
     genai.configure(api_key=GEMINI_API_KEY)
     return genai.GenerativeModel(
         model_name=GEMINI_MODEL,
-        tools=[get_woreda_report, get_zone_report, get_region_report, compare_woredas],
         system_instruction=SYSTEM_INSTRUCTION,
     )
+
+
+def explain_with_gemini(question: str, compact: dict[str, Any]) -> str:
+    model = _create_model()
+    payload = json.dumps(compact, indent=2)
+    prompt = (
+        f"User question: {question}\n\n"
+        f"Analytics data (JSON):\n{payload}\n\n"
+        "Provide a clear expert explanation based on this data."
+    )
+    response = model.generate_content(prompt)
+    return response.text or ""
 
 
 class ChatManager:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._sessions: dict[str, Any] = {}
-        self._model: genai.GenerativeModel | None = None
-
-    def _model_instance(self) -> genai.GenerativeModel:
-        if self._model is None:
-            self._model = _create_model()
-        return self._model
+        self._sessions: dict[str, list[dict[str, str]]] = {}
 
     def new_session(self) -> str:
         sid = str(uuid.uuid4())
         with self._lock:
-            self._sessions[sid] = self._model_instance().start_chat(
-                enable_automatic_function_calling=True
-            )
+            self._sessions[sid] = []
         return sid
 
     def reset(self, session_id: str) -> None:
         with self._lock:
-            self._sessions[session_id] = self._model_instance().start_chat(
-                enable_automatic_function_calling=True
-            )
+            self._sessions[session_id] = []
 
     def ask(self, question: str, session_id: str | None = None) -> dict[str, Any]:
-        with self._lock:
-            if session_id and session_id in self._sessions:
-                sid, chat = session_id, self._sessions[session_id]
-            else:
-                sid = session_id or str(uuid.uuid4())
-                chat = self._model_instance().start_chat(
-                    enable_automatic_function_calling=True
-                )
-                self._sessions[sid] = chat
-
+        sid = session_id or str(uuid.uuid4())
         try:
-            response = chat.send_message(question)
-            return {"session_id": sid, "reply": response.text or "", "error": None}
+            intent = parse_intent(question)
+            result = run_query(intent)
+            compact = build_compact_json(intent, result)
+
+            if not GEMINI_API_KEY:
+                return {
+                    "session_id": sid,
+                    "reply": json.dumps(compact, indent=2),
+                    "data": compact,
+                    "error": "GEMINI_API_KEY not set — returning raw analytics only.",
+                }
+
+            reply = explain_with_gemini(question, compact)
+            with self._lock:
+                if sid not in self._sessions:
+                    self._sessions[sid] = []
+                self._sessions[sid].append({"q": question, "a": reply})
+
+            return {
+                "session_id": sid,
+                "reply": reply,
+                "data": compact,
+                "error": None,
+            }
+        except ValueError as exc:
+            return {"session_id": sid, "reply": None, "error": str(exc), "data": None}
         except Exception as exc:
             msg = str(exc)
             if "429" in msg:
                 msg = "Rate limit exceeded. Wait about 60 seconds and try again."
-            return {"session_id": sid, "reply": None, "error": msg}
+            logger.exception("Chat pipeline failed")
+            return {"session_id": sid, "reply": None, "error": msg, "data": None}
 
 
 _manager: ChatManager | None = None

@@ -12,6 +12,7 @@ class ChatResponse(BaseModel):
     session_id: str
     reply: str | None = None
     error: str | None = None
+    data: dict | None = None
 
 
 class AnalyzeRequest(BaseModel):

@@ -35,23 +35,31 @@ TOPIC_TO_LAYERS = {
     'lulc':         ['lulc'],
     'land use':     ['lulc'],
     'land cover':   ['lulc'],
+    'vci':          ['vci'],
+    'vegetation condition': ['vci'],
+    'spei':         ['spei'],
+    'drought index': ['spei'],
     'summary':      ['rangeland','vegetation','soil','climate','livestock','water'],
     'pastoralist':  ['rangeland','vegetation','soil','climate','livestock','water'],
 }
 
 def detect_layers(question, region_key=None):
+    from app.data_catalog import list_available_indicators
+
+    available = set(list_available_indicators())
     q = question.lower()
     found = set()
     for topic in sorted(TOPIC_TO_LAYERS, key=len, reverse=True):
         if topic in q:
             for lk in TOPIC_TO_LAYERS[topic]:
-                # if region_key given, skip layers not in that region
+                if lk not in available:
+                    continue
                 if region_key:
                     if lk in REGION_REGISTRY[region_key]['layers']:
                         found.add(lk)
                 else:
                     found.add(lk)
-    return list(found) if found else ['rangeland','climate','vegetation']
+    return list(found) if found else ['rangeland', 'climate', 'vegetation']
 
 def detect_admin_level(text):
     t = text.lower()

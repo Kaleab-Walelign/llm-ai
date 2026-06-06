@@ -7,6 +7,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gdal-bin \
     libgdal-dev \
+    libspatialindex-dev \
     gcc \
     g++ \
     curl \
@@ -25,7 +26,9 @@ COPY static ./static
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 # Overridden in docker-compose / .env
-ENV NRMS_DATA_DIR=/data/tifs
+ENV NRMS_DATA_DIR=/data/rangeland
+ENV DATABASE_URL=postgresql://nrms:nrms@postgres:5432/nrms
+ENV REDIS_URL=redis://redis:6379/0
 ENV GEOSERVER_URL=https://nrms.ati.gov.et/geoserver
 
 EXPOSE 8001

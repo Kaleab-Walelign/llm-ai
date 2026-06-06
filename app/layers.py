@@ -93,5 +93,11 @@ LAYER_DESCRIBE['slope']         = {1:'> 15% — very steep',2:'10–15% — stee
     3:'5–10% — moderate',4:'2–5% — gentle',5:'0–2% — flat, best for rangeland'}
 LAYER_CLASSIFY['slope']         = classify_standard
 
-print(f'✅ {len(LAYER_CLASSIFY)} layer classifiers ready (shared across all regions)')
+LAYER_DESCRIBE['vci']           = {1:'Very poor vegetation condition',2:'Poor vegetation condition',
+    3:'Moderate vegetation condition',4:'Good vegetation condition',5:'Excellent vegetation condition'}
+LAYER_CLASSIFY['vci']           = classify_standard
+
+LAYER_DESCRIBE['spei']          = {1:'Extreme drought',2:'Severe drought',3:'Moderate drought',
+    4:'Normal conditions',5:'Very wet conditions'}
+LAYER_CLASSIFY['spei']          = classify_standard
 

@@ -81,11 +81,12 @@ def get_recommendation(layer_key, label):
 def build_ai_context(result):
     if 'error' in result:
         return f'Error: {result["error"]}'
+    area = result.get("area") or result.get("woreda", "")
     lines = [
-        f'AREA: {result["area"]}',
+        f'AREA: {area}',
         f'REGION: {result.get("region_display","")}',
-        f'ADMIN LEVEL: {result.get("admin_level","")}',
-        f'FEATURES: {result["feature_count"]} polygon(s)',
+        f'ADMIN LEVEL: {result.get("admin_level","woreda")}',
+        f'FEATURES: {result.get("feature_count", 1)} polygon(s)',
         '', '=== LAYER RESULTS ===',
     ]
     for lk, data in result['layers'].items():
